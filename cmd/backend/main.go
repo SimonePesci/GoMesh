@@ -8,6 +8,7 @@ import (
 )
 
 // This is a simple backend service for testing the proxy
+// It simulates what "App B" would look like
 
 type Response struct {
 	Message   string    `json:"message"`
@@ -41,12 +42,20 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+// panicHandler intentionally panics to test recovery middleware
+func panicHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[BACKEND] Panic endpoint called - about to panic!")
+	panic("intentional panic for testing recovery middleware!")
+}
+
 func main() {
 	http.HandleFunc("/", handler)
 	http.HandleFunc("/health", healthHandler)
+	http.HandleFunc("/panic", panicHandler) // Test endpoint
 
 	log.Println("[BACKEND] Starting test backend on :3000")
 	log.Println("[BACKEND] Ready to receive requests from the proxy")
+	log.Println("[BACKEND] Test panic recovery: curl http://localhost:8000/panic")
 	
 	if err := http.ListenAndServe(":3000", nil); err != nil {
 		log.Fatalf("Backend failed: %v", err)

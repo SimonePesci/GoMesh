@@ -2,18 +2,18 @@
 
 A high-performance, distributed Service Mesh with a gRPC Control Plane built from scratch in Go.
 
-## Current Status: Phase 2 Part 2 - Prometheus Metrics ✅
+## Current Status: Phase 2 Part 3 - Advanced Middleware ✅
 
 ### What's Complete:
 
 - ✅ **Phase 1**: Basic reverse proxy with graceful shutdown
 - ✅ **Phase 2 Part 1**: Structured JSON logging with Zap and logging middleware
 - ✅ **Phase 2 Part 2**: Prometheus metrics with `/metrics` endpoint
+- ✅ **Phase 2 Part 3**: Recovery middleware and middleware chaining
 
 ### Next Up:
 
-- 📍 **Phase 2 Part 3**: Advanced middleware patterns (recovery, chaining)
-- → **Phase 2 Part 4**: Distributed tracing with trace IDs
+- 📍 **Phase 2 Part 4**: Distributed tracing with trace IDs
 
 ## Project Structure
 
@@ -109,6 +109,18 @@ curl http://localhost:8000/metrics
 # gomesh_requests_in_flight 0
 ```
 
+### Step 6: Test Recovery Middleware!
+
+```bash
+# Trigger a panic in the backend (proxy should handle it gracefully)
+curl http://localhost:8000/panic
+
+# You'll see:
+# - Client receives: "Internal Server Error" (HTTP 500)
+# - Proxy logs the panic with full stack trace
+# - Proxy KEEPS RUNNING (doesn't crash!) ✅
+```
+
 ## What's Happening?
 
 ```
@@ -196,15 +208,18 @@ Edit `config/proxy.yaml` to change:
 - ✅ **Middleware Chaining** - Metrics → Logging → Proxy handler stack
 - ✅ **/metrics Endpoint** - Standard Prometheus scraping endpoint
 
+### Phase 2 Part 3: Advanced Middleware ✅
+
+- ✅ **Panic Recovery** - Using `defer` + `recover()` to catch runtime panics
+- ✅ **Stack Traces** - `runtime/debug.Stack()` for debugging panics
+- ✅ **Resilient Design** - Isolated request failures don't crash the entire proxy
+- ✅ **Middleware Chaining** - Variadic function pattern for composable middleware
+- ✅ **Order-Aware Composition** - Reverse loop to apply middleware in correct order
+- ✅ **Graceful Degradation** - Return 500 on panic, log details, keep serving
+
 ## Next Steps: Phase 2 - Observability (Continued)
 
-### Phase 2 Part 3: Advanced Middleware 📍 NEXT
-
-- Middleware chaining helper
-- Recovery middleware (panic handling)
-- Prevent entire proxy from crashing
-
-### Phase 2 Part 4: Distributed Tracing
+### Phase 2 Part 4: Distributed Tracing 📍 NEXT
 
 - Generate unique trace IDs
 - Inject trace IDs into request headers
@@ -252,19 +267,24 @@ curl -X POST http://localhost:8000/api/data -d '{"key":"value"}'
 
 ## How the Middleware Stack Works
 
-Understanding the request flow through our middleware:
+Understanding the request flow through our middleware chain:
 
 ```
 Request from Client
         ↓
 ┌───────────────────────────┐
+│  RecoveryMiddleware       │  ← OUTERMOST: Catches ALL panics (defer/recover)
+│  (panic safety)           │
+└───────────────────────────┘
+        ↓
+┌───────────────────────────┐
 │  MetricsMiddleware        │  ← Increments in-flight counter, starts timer
-│  (wraps logging)          │
+│  (observability)          │
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
 │  LoggingMiddleware        │  ← Logs "request started"
-│  (wraps handler)          │
+│  (structured logging)     │
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
@@ -286,8 +306,53 @@ Request from Client
 │  (records metrics)        │     Decrements in-flight counter
 └───────────────────────────┘
         ↓
+┌───────────────────────────┐
+│  RecoveryMiddleware       │  ← If panic occurred, catches it here
+│  (returns 500 if panic)   │     Logs with stack trace, returns 500
+└───────────────────────────┘
+        ↓
 Response to Client
 ```
+
+### Middleware Order Matters!
+
+The order of middleware is critical:
+1. **Recovery** (outermost) - Must catch panics from ALL inner middleware
+2. **Metrics** - Track all requests (even if they panic)
+3. **Logging** - Log all requests (even if they panic)
+4. **Proxy Handler** - The actual reverse proxy logic
+
+### The Chain Function
+
+Using the Chain helper makes middleware composition clean and readable:
+
+```go
+// Before: Manual nesting (hard to read)
+handler = RecoveryMiddleware(logger,
+    MetricsMiddleware(metrics,
+        LoggingMiddleware(logger, handler)))
+
+// After: Chain function (clean & clear)
+handler = Chain(handler,
+    RecoveryMiddleware(logger),    // First = outermost
+    MetricsMiddleware(metrics),    // Middle
+    LoggingMiddleware(logger),     // Last = innermost
+)
+```
+
+**How Chain works:**
+
+```go
+func Chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
+    // Apply in reverse so first middleware becomes outermost
+    for i := len(middlewares) - 1; i >= 0; i-- {
+        handler = middlewares[i](handler)
+    }
+    return handler
+}
+```
+
+This produces: `Recovery(Metrics(Logging(handler)))`
 
 ### Before vs After Logging
 
@@ -347,6 +412,44 @@ gomesh_errors_total{service="backend",error_type="timeout"} 0
 - **requests_in_flight**: Current load on the proxy
 - **errors_total**: Error counts by type for alerting
 
+### Testing Recovery Middleware
+
+The backend has a `/panic` endpoint that intentionally triggers a panic to test recovery:
+
+```bash
+# Trigger a panic
+curl http://localhost:8000/panic
+```
+
+**What happens:**
+
+1. **Client receives:**
+   ```
+   Internal Server Error
+   ```
+   HTTP status: 500
+
+2. **Proxy logs show:**
+   ```json
+   {
+     "level": "error",
+     "msg": "panic recovered",
+     "error": "intentional panic for testing recovery middleware!",
+     "path": "/panic",
+     "method": "GET",
+     "stack": "goroutine 123 [running]:\nruntime/debug.Stack()..."
+   }
+   ```
+
+3. **Proxy keeps running!** ✅
+   - Other requests still work
+   - No downtime
+   - Panic isolated to single request
+
+**Without recovery middleware, the entire proxy would crash.** This is the difference between:
+- ❌ One bad request → entire proxy down → manual restart
+- ✅ One bad request → 500 error → logged → proxy still running
+
 ---
 
 ## Complete Roadmap
@@ -370,10 +473,12 @@ gomesh_errors_total{service="backend",error_type="timeout"} 0
 - Request counters, histograms, and gauges
 - Metrics middleware for automatic tracking
 
-### Phase 2 Part 3: Advanced Middleware
+### ✅ Phase 2 Part 3: Advanced Middleware (Complete)
 
-- Middleware chaining
-- Recovery middleware
+- Middleware chaining helper with Chain() function
+- Recovery middleware with panic handling
+- Stack trace logging for debugging
+- Resilient proxy that doesn't crash on panics
 
 ### Phase 2 Part 4: Distributed Tracing
 
@@ -387,7 +492,7 @@ gomesh_errors_total{service="backend",error_type="timeout"} 0
 - Dynamic configuration
 - Hot reload
 
-### Phase 4: Service Discovery & Load Balancing (~1
+### Phase 4: Service Discovery & Load Balancing
 
 - Service registry
 - Round-robin load balancing
