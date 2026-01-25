@@ -2,10 +2,12 @@ package proxy
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+
+	"github.com/SimonePesci/gomesh/pkg/logging"
+	"go.uber.org/zap"
 )
 
 // Proxy struct, a reverse proxy reference and a config reference
@@ -15,7 +17,7 @@ type Handler struct {
 }
 
 // Builds a new Handler
-func NewHandler(config *Config) (*Handler, error) {
+func NewHandler(config *Config, logger *logging.Logger) (*Handler, error) {
 
 	// Parse the Backend URL from Config file
 	rawBackendURL := config.GetBackendURL()
@@ -29,19 +31,26 @@ func NewHandler(config *Config) (*Handler, error) {
 
 	// Customize proxy to handle errors differently
 	reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		log.Printf("[ERROR] Proxy error: %v | URL: %s", err, r.URL.Path)
+		logger.Error("proxy error",
+			zap.Error(err),
+			zap.String("url", r.URL.Path),
+		)
 		http.Error(w, "Gateway Error", http.StatusBadGateway)
 	}
 
 	// Modify outgoing requests to backend
 	originalDirector := reverseProxy.Director
-	originalDirector = func(req *http.Request) {
+	reverseProxy.Director = func(req *http.Request) {
 
 		originalDirector(req)
 
 		req.Header.Set("X-Forwarded-By", "GoMesh-Proxy")
 
-		log.Printf("Forwarding %s %s -> %s", req.Method, req.URL, backendURL)
+		logger.Info("forwarding request",
+			zap.String("method", req.Method),
+			zap.String("url", req.URL.String()),
+			zap.String("backend_url", backendURL.String()),
+		)
 	}
 
 

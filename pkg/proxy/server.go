@@ -3,29 +3,35 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
+
+	"github.com/SimonePesci/gomesh/pkg/logging"
+	"go.uber.org/zap"
 )
 
 type Server struct {
 	config *Config
 	handler *Handler
 	httpServer *http.Server
+	logger *logging.Logger
 }
 
-func NewServer(config *Config) (*Server, error) {
+func NewServer(config *Config, logger *logging.Logger) (*Server, error) {
 
 	// Create the handler
-	handler, err := NewHandler(config)
+	handler, err := NewHandler(config, logger)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to create handler for the server: %w", err)
 	}
 
+	// Wrap handler with logging middleware
+	handlerWithMiddleware := LoggingMiddleware(logger, handler)
+
 	// Create the http server for the proxy
 	httpServer := &http.Server{
 		Addr: fmt.Sprintf(":%d", config.Proxy.ListenPort),
-		Handler: handler,
+		Handler: handlerWithMiddleware,
 		ReadTimeout: config.Proxy.Timeout.ReadTimeout,
 		WriteTimeout: config.Proxy.Timeout.WriteTimeout,
 		IdleTimeout: config.Proxy.Timeout.IdleTimeout,
@@ -35,17 +41,22 @@ func NewServer(config *Config) (*Server, error) {
 		config: config,
 		handler: handler,
 		httpServer: httpServer,
+		logger: logger,
 	}, nil
 
 }
 
 // Starts the Server: will run till blocked
 func (s *Server) Start() error {
-	log.Printf("[INFO] GoMesh Proxy starting at port: %d", s.config.Proxy.ListenPort)
-	log.Printf("[INFO] Forwarding all traffic to %s", s.config.GetBackendURL())
-	log.Printf("[INFO] Use Ctrl+C to stop server")
+	s.logger.Info("proxy server starting",
+		zap.Int("port", s.config.Proxy.ListenPort),
+		zap.String("backend_url", s.config.GetBackendURL()),
+	)
 
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		s.logger.Error("failure in the server...stopping",
+			zap.Error(err),
+		)
 		return fmt.Errorf("Failure in the server...stopping: %w", err)
 	}
 
@@ -54,7 +65,7 @@ func (s *Server) Start() error {
 
 // Handle Server closing gracefully
 func (s *Server) Shutdown(timeout time.Duration) error {
-	log.Printf("[INFO] Shutting down server gracefully...")
+	s.logger.Info("shutting down server gracefully...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	
@@ -64,6 +75,6 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 		return fmt.Errorf("Server shutdown failed: %w", err)
 	}
 
-	log.Printf("[INFO] Server stopped gracefully!")
+	s.logger.Info("server stopped gracefully!")
 	return nil
 }
