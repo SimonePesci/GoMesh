@@ -2,30 +2,44 @@ package main
 
 import (
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/SimonePesci/gomesh/pkg/logging"
 	"github.com/SimonePesci/gomesh/pkg/proxy"
+	"go.uber.org/zap"
 )
 
 
 func main() {
 
 	configPath := flag.String("config", "config/proxy.yaml", "Path to config file")
+	production := flag.Bool("production", false, "Enable production mode (JSON logging)")
 	flag.Parse()
 
-	log.Printf("[INFO] Loading configuration file from path: %s", *configPath)
+	logger, err := logging.NewLogger(*production)
+	if err != nil {
+		panic("Failed to create logger: " + err.Error())
+	}
+	defer logger.Sync() // Flushes buffered log entries before exiting
+
+	logger.Info("Loading configuration file from path",
+		zap.String("path", *configPath),
+	)
 	config, err := proxy.LoadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to load config %v", err)
+		logger.Fatal("Failed to load config",
+			zap.Error(err),
+		)
 	}
 
-	server, err := proxy.NewServer(config)
+	server, err := proxy.NewServer(config, logger)
 	if err != nil {
-		log.Fatalf("[FATAL] Failed to create proxy server: %v", err)
+		logger.Fatal("Failed to create proxy server",
+			zap.Error(err),
+		)
 	}
 
 	signChan := make(chan os.Signal, 1)
@@ -40,16 +54,22 @@ func main() {
 	select {
 	case err := <- serverErrors:
 		if err != nil {
-			log.Fatalf("[FATAL] Server error: %v", err)
+			logger.Fatal("Server error",
+				zap.Error(err),
+			)
 		}
 	case sig := <- signChan:
-		log.Printf("[INFO] Received signal: %s, shutting down...", sig)
+		logger.Info("Received signal",
+			zap.String("signal", sig.String()),
+		)
 
 		if err := server.Shutdown(10 * time.Second); err != nil {
-			log.Printf("[WARN] Failed to shutdown server gracefully: %v", err)
+			logger.Warn("Failed to shutdown server gracefully",
+				zap.Error(err),
+			)
 		}
 	}
 
 
-	log.Printf("[INFO] Proxy Terminated Successfully!")
+	logger.Info("Proxy Terminated Successfully!")
 }
