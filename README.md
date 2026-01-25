@@ -2,17 +2,17 @@
 
 A high-performance, distributed Service Mesh with a gRPC Control Plane built from scratch in Go.
 
-## Current Status: Phase 2 Part 1 - Structured Logging ✅
+## Current Status: Phase 2 Part 2 - Prometheus Metrics ✅
 
 ### What's Complete:
 
 - ✅ **Phase 1**: Basic reverse proxy with graceful shutdown
 - ✅ **Phase 2 Part 1**: Structured JSON logging with Zap and logging middleware
+- ✅ **Phase 2 Part 2**: Prometheus metrics with `/metrics` endpoint
 
 ### Next Up:
 
-- 📍 **Phase 2 Part 2**: Prometheus metrics (`/metrics` endpoint)
-- → **Phase 2 Part 3**: Advanced middleware patterns (recovery, chaining)
+- 📍 **Phase 2 Part 3**: Advanced middleware patterns (recovery, chaining)
 - → **Phase 2 Part 4**: Distributed tracing with trace IDs
 
 ## Project Structure
@@ -30,7 +30,8 @@ GoMesh/
 │   └── proxy/              # Proxy package
 │       ├── config.go       # Configuration loader
 │       ├── handler.go      # Reverse proxy logic
-│       ├── middleware.go   # Logging middleware (Phase 2 Part 1)
+│       ├── middleware.go   # Logging & metrics middleware
+│       ├── metrics.go      # Prometheus metrics (Phase 2 Part 2)
 │       └── server.go       # HTTP server
 ├── config/
 │   └── proxy.yaml          # Proxy configuration
@@ -94,6 +95,18 @@ curl http://localhost:8000/api/users
 #   "path": "/api/users",
 #   "method": "GET"
 # }
+```
+
+### Step 5: Check Metrics!
+
+```bash
+# View Prometheus metrics
+curl http://localhost:8000/metrics
+
+# You'll see metrics like:
+# gomesh_requests_total{service="backend",status="2xx"} 1
+# gomesh_request_duration_seconds_bucket{service="backend",le="0.05"} 1
+# gomesh_requests_in_flight 0
 ```
 
 ## What's Happening?
@@ -173,16 +186,19 @@ Edit `config/proxy.yaml` to change:
 - ✅ **Defer Pattern** - `defer logger.Sync()` ensures cleanup
 - ✅ **Structured Fields** - JSON logs with typed fields (method, path, status, latency)
 
+### Phase 2 Part 2: Prometheus Metrics ✅
+
+- ✅ **Prometheus Client** - Using `github.com/prometheus/client_golang`
+- ✅ **Metric Types** - Counters (requests_total), Histograms (duration), Gauges (in_flight)
+- ✅ **Metric Labels** - Multi-dimensional metrics (service, status, error_type)
+- ✅ **promauto Package** - Automatic registration with default registry
+- ✅ **HTTP Multiplexer** - Using `http.NewServeMux()` for multiple endpoints
+- ✅ **Middleware Chaining** - Metrics → Logging → Proxy handler stack
+- ✅ **/metrics Endpoint** - Standard Prometheus scraping endpoint
+
 ## Next Steps: Phase 2 - Observability (Continued)
 
-### Phase 2 Part 2: Prometheus Metrics 📍 NEXT
-
-- Metrics package with counters and histograms
-- `/metrics` endpoint for Prometheus scraping
-- Metrics middleware to record request statistics
-- Track: request counts, latencies (p50, p95, p99), error rates
-
-### Phase 2 Part 3: Advanced Middleware
+### Phase 2 Part 3: Advanced Middleware 📍 NEXT
 
 - Middleware chaining helper
 - Recovery middleware (panic handling)
@@ -242,7 +258,12 @@ Understanding the request flow through our middleware:
 Request from Client
         ↓
 ┌───────────────────────────┐
-│  LoggingMiddleware        │  ← Logs "request started", starts timer
+│  MetricsMiddleware        │  ← Increments in-flight counter, starts timer
+│  (wraps logging)          │
+└───────────────────────────┘
+        ↓
+┌───────────────────────────┐
+│  LoggingMiddleware        │  ← Logs "request started"
 │  (wraps handler)          │
 └───────────────────────────┘
         ↓
@@ -258,6 +279,11 @@ Request from Client
 ┌───────────────────────────┐
 │  LoggingMiddleware        │  ← Logs "request completed" with status & latency
 │  (calculates latency)     │
+└───────────────────────────┘
+        ↓
+┌───────────────────────────┐
+│  MetricsMiddleware        │  ← Records metrics (counter, histogram, gauge)
+│  (records metrics)        │     Decrements in-flight counter
 └───────────────────────────┘
         ↓
 Response to Client
@@ -284,6 +310,43 @@ The structured logs are:
 - **Searchable** - Query by any field (status=500, latency>100ms, etc.)
 - **Standardized** - Consistent format across all services
 
+### Prometheus Metrics
+
+After sending some requests, check the `/metrics` endpoint:
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+**Key Metrics Available:**
+
+```prometheus
+# Total number of requests (labeled by service and status bucket)
+gomesh_requests_total{service="backend",status="2xx"} 5
+gomesh_requests_total{service="backend",status="4xx"} 1
+gomesh_requests_total{service="backend",status="5xx"} 0
+
+# Request duration histogram (shows latency distribution)
+gomesh_request_duration_seconds_bucket{service="backend",le="0.005"} 3
+gomesh_request_duration_seconds_bucket{service="backend",le="0.01"} 5
+gomesh_request_duration_seconds_bucket{service="backend",le="0.05"} 5
+gomesh_request_duration_seconds_sum{service="backend"} 0.023
+gomesh_request_duration_seconds_count{service="backend"} 5
+
+# Number of requests currently being processed
+gomesh_requests_in_flight 0
+
+# Total errors (labeled by service and error type)
+gomesh_errors_total{service="backend",error_type="timeout"} 0
+```
+
+**What These Metrics Tell You:**
+
+- **requests_total**: Count requests by status code (2xx, 3xx, 4xx, 5xx)
+- **request_duration_seconds**: Latency percentiles (p50, p95, p99) for SLA tracking
+- **requests_in_flight**: Current load on the proxy
+- **errors_total**: Error counts by type for alerting
+
 ---
 
 ## Complete Roadmap
@@ -300,11 +363,12 @@ The structured logs are:
 - Logging middleware
 - Request/response tracking
 
-### 📍 Phase 2 Part 2: Prometheus Metrics
+### ✅ Phase 2 Part 2: Prometheus Metrics (Complete)
 
-- Metrics package
-- `/metrics` endpoint
-- Request counters and histograms
+- Metrics package with Prometheus client
+- `/metrics` endpoint for scraping
+- Request counters, histograms, and gauges
+- Metrics middleware for automatic tracking
 
 ### Phase 2 Part 3: Advanced Middleware
 
