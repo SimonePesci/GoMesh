@@ -6,7 +6,8 @@ GoMesh is a lightweight HTTP reverse proxy written in Go. It sits in front of ba
 
 - HTTP reverse proxy with YAML configuration
 - Graceful shutdown on SIGINT / SIGTERM
-- Structured request logging with [Zap](https://github.com/uber-go/zap)
+- Structured logging (Zap)
+- Prometheus metrics on `/metrics`
 
 ## Requirements
 
@@ -20,8 +21,8 @@ GoMesh/
 │   ├── proxy/
 │   └── backend/
 ├── pkg/
-│   ├── logging/    # Zap logger wrapper
-│   └── proxy/      # Config, handler, middleware, server
+│   ├── logging/
+│   └── proxy/      # Handler, middleware, metrics, server
 ├── config/proxy.yaml
 ├── Makefile
 └── go.mod
@@ -32,25 +33,25 @@ GoMesh/
 ```bash
 go mod download
 
-# terminal 1
-go run cmd/backend/main.go
+go run cmd/backend/main.go          # :3000
+go run cmd/proxy/main.go            # :8000
 
-# terminal 2
-go run cmd/proxy/main.go
-
-# terminal 3
 curl http://localhost:8000/api/users
+curl http://localhost:8000/metrics
 ```
 
-Proxy logs include method, path, status, latency, and remote address as structured fields.
+### Metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `gomesh_requests_total` | counter | Requests by service and status class |
+| `gomesh_request_duration_seconds` | histogram | Request latency |
+| `gomesh_requests_in_flight` | gauge | In-flight requests |
+| `gomesh_errors_total` | counter | Errors by type |
 
 ## Configuration
 
 Edit `config/proxy.yaml` for listen port, backend address, and timeouts.
-
-```bash
-go run cmd/proxy/main.go -config /path/to/config.yaml
-```
 
 ## Build
 

@@ -83,3 +83,31 @@ func LoggingMiddleware(logger *logging.Logger, next http.Handler) http.Handler {
 	})
 }
 
+// Middleware to record metrics for the request
+func MetricsMiddleware(metrics *Metrics, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// Avoiding metrics in metrics: would cause infinite recursion!
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		startTime := time.Now()
+
+		metrics.IncInFlight()
+		defer metrics.DecInFlight() // this will ensure decrementing the in flight counter even with a panic
+
+		wrappedWriter := newResponseWriter(w)
+
+		next.ServeHTTP(wrappedWriter, r)
+
+		// In Seconds to be compatible with Prometheus (which uses seconds for the histogram)
+		duration := time.Since(startTime).Seconds()
+
+		// Record the request metrics
+		// TODO: get the service name from the request header
+		metrics.RecordRequest("backend", wrappedWriter.statusCode, duration)
+	})
+}
+

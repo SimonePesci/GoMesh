@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SimonePesci/gomesh/pkg/logging"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
@@ -15,9 +16,13 @@ type Server struct {
 	handler *Handler
 	httpServer *http.Server
 	logger *logging.Logger
+	metrics *Metrics
 }
 
 func NewServer(config *Config, logger *logging.Logger) (*Server, error) {
+
+	// Create the metrics
+	metrics := NewMetrics()
 
 	// Create the handler
 	handler, err := NewHandler(config, logger)
@@ -25,13 +30,23 @@ func NewServer(config *Config, logger *logging.Logger) (*Server, error) {
 		return nil, fmt.Errorf("Failed to create handler for the server: %w", err)
 	}
 
-	// Wrap handler with logging middleware
-	handlerWithMiddleware := LoggingMiddleware(logger, handler)
+	// Multiplexer to handle different routes
+	mux := http.NewServeMux()
+
+	// Register our metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// Combine the middlewares
+	// Metrics -> Logging -> Proxy
+	wrappedHandler := MetricsMiddleware(metrics, LoggingMiddleware(logger, handler))
+
+	// Register the wrapped handler
+	mux.Handle("/", wrappedHandler)
 
 	// Create the http server for the proxy
 	httpServer := &http.Server{
 		Addr: fmt.Sprintf(":%d", config.Proxy.ListenPort),
-		Handler: handlerWithMiddleware,
+		Handler: mux,
 		ReadTimeout: config.Proxy.Timeout.ReadTimeout,
 		WriteTimeout: config.Proxy.Timeout.WriteTimeout,
 		IdleTimeout: config.Proxy.Timeout.IdleTimeout,
@@ -42,6 +57,7 @@ func NewServer(config *Config, logger *logging.Logger) (*Server, error) {
 		handler: handler,
 		httpServer: httpServer,
 		logger: logger,
+		metrics: metrics,
 	}, nil
 
 }
@@ -51,6 +67,10 @@ func (s *Server) Start() error {
 	s.logger.Info("proxy server starting",
 		zap.Int("port", s.config.Proxy.ListenPort),
 		zap.String("backend_url", s.config.GetBackendURL()),
+	)
+
+	s.logger.Info("metrics endpoint registered at /metrics",
+		zap.String("url", fmt.Sprintf("http://localhost:%d/metrics", s.config.Proxy.ListenPort)),
 	)
 
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
