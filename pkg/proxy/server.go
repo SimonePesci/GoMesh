@@ -37,8 +37,13 @@ func NewServer(config *Config, logger *logging.Logger) (*Server, error) {
 	mux.Handle("/metrics", promhttp.Handler())
 
 	// Combine the middlewares
-	// Metrics -> Logging -> Proxy
-	wrappedHandler := MetricsMiddleware(metrics, LoggingMiddleware(logger, handler))
+	// Recovery -> Metrics -> Logging -> Proxy
+	wrappedHandler := Chain(
+		handler,
+		func(h http.Handler) http.Handler { return RecoveryMiddleware(logger, h)},
+		func(h http.Handler) http.Handler { return MetricsMiddleware(metrics, h)},
+		func(h http.Handler) http.Handler { return LoggingMiddleware(logger, h)},
+	)
 
 	// Register the wrapped handler
 	mux.Handle("/", wrappedHandler)

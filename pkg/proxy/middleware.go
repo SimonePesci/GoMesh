@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"net/http"
+	"runtime/debug"
 	"time"
 
 	"github.com/SimonePesci/gomesh/pkg/logging"
@@ -109,5 +110,45 @@ func MetricsMiddleware(metrics *Metrics, next http.Handler) http.Handler {
 		// TODO: get the service name from the request header
 		metrics.RecordRequest("backend", wrappedWriter.statusCode, duration)
 	})
+}
+
+// Middleware to recover from panics and log the error
+// This will prevent the entire proxy from crashing
+func RecoveryMiddleware(logging *logging.Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// Defer the recovery
+		// it will be executed after the next.ServeHTTP() call
+		defer func() {
+			// Log the panic with stack trace
+			if err := recover(); err != nil {
+				logging.Error("panic recovered",
+					zap.Any("error", err),
+					zap.String("path", r.URL.Path),
+					zap.String("method", r.Method),
+					zap.String("stack", string(debug.Stack())),
+				)
+
+				// Return a 500 Internal Server Error to the client
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+
+		next.ServeHTTP(w, r)
+
+	})
+}
+
+// Middleware chainer
+// This will apply middlewares in the order they appear in the list
+func Chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
+
+	// Apply middlewares in reverse order so the first one becomes outermost
+	// This ensures: Chain(h, A, B, C) produces: A(B(C(h)))
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		handler = middlewares[i](handler)
+	}
+
+	return handler
 }
 

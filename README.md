@@ -8,6 +8,7 @@ GoMesh is a lightweight HTTP reverse proxy written in Go. It sits in front of ba
 - Graceful shutdown on SIGINT / SIGTERM
 - Structured logging (Zap)
 - Prometheus metrics on `/metrics`
+- Panic recovery middleware (keeps the proxy running on handler panics)
 
 ## Requirements
 
@@ -22,7 +23,7 @@ GoMesh/
 │   └── backend/
 ├── pkg/
 │   ├── logging/
-│   └── proxy/      # Handler, middleware, metrics, server
+│   └── proxy/
 ├── config/proxy.yaml
 ├── Makefile
 └── go.mod
@@ -33,21 +34,19 @@ GoMesh/
 ```bash
 go mod download
 
-go run cmd/backend/main.go          # :3000
-go run cmd/proxy/main.go            # :8000
+go run cmd/backend/main.go
+go run cmd/proxy/main.go
 
 curl http://localhost:8000/api/users
 curl http://localhost:8000/metrics
+
+# intentional panic endpoint (proxy returns 500 and keeps running)
+curl http://localhost:8000/panic
 ```
 
-### Metrics
+## Middleware stack
 
-| Metric | Type | Description |
-|---|---|---|
-| `gomesh_requests_total` | counter | Requests by service and status class |
-| `gomesh_request_duration_seconds` | histogram | Request latency |
-| `gomesh_requests_in_flight` | gauge | In-flight requests |
-| `gomesh_errors_total` | counter | Errors by type |
+Requests pass through recovery, metrics, and logging middleware before the reverse proxy handler. Recovery is outermost so panics from any inner layer are caught.
 
 ## Configuration
 
