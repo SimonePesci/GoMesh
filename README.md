@@ -2,7 +2,7 @@
 
 A high-performance, distributed Service Mesh with a gRPC Control Plane built from scratch in Go.
 
-## Current Status: Phase 2 Part 3 - Advanced Middleware ✅
+## Current Status: Phase 2 Part 4 - Distributed Tracing ✅
 
 ### What's Complete:
 
@@ -10,10 +10,11 @@ A high-performance, distributed Service Mesh with a gRPC Control Plane built fro
 - ✅ **Phase 2 Part 1**: Structured JSON logging with Zap and logging middleware
 - ✅ **Phase 2 Part 2**: Prometheus metrics with `/metrics` endpoint
 - ✅ **Phase 2 Part 3**: Recovery middleware and middleware chaining
+- ✅ **Phase 2 Part 4**: Distributed tracing with unique trace IDs
 
 ### Next Up:
 
-- 📍 **Phase 2 Part 4**: Distributed tracing with trace IDs
+- 📍 **Phase 3**: gRPC Control Plane for dynamic configuration
 
 ## Project Structure
 
@@ -27,10 +28,12 @@ GoMesh/
 ├── pkg/
 │   ├── logging/            # Structured logging (Phase 2 Part 1)
 │   │   └── logging.go      # Zap logger wrapper
+│   ├── tracing/            # Distributed tracing (Phase 2 Part 4)
+│   │   └── tracer.go       # Trace ID generation and propagation
 │   └── proxy/              # Proxy package
 │       ├── config.go       # Configuration loader
 │       ├── handler.go      # Reverse proxy logic
-│       ├── middleware.go   # Logging & metrics middleware
+│       ├── middleware.go   # All middleware (logging, metrics, tracing, recovery)
 │       ├── metrics.go      # Prometheus metrics (Phase 2 Part 2)
 │       └── server.go       # HTTP server
 ├── config/
@@ -121,6 +124,28 @@ curl http://localhost:8000/panic
 # - Proxy KEEPS RUNNING (doesn't crash!) ✅
 ```
 
+### Step 7: Test Distributed Tracing!
+
+```bash
+# Make a request and check the trace ID in the response headers
+curl -v http://localhost:8000/api/users
+
+# You'll see in the response headers:
+# X-Trace-ID: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+
+# The response body also includes the trace ID:
+# {
+#   "message": "Hello from the backend service!",
+#   "trace_id": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+#   ...
+# }
+
+# You can also provide your own trace ID:
+curl -H "X-Trace-ID: my-custom-trace-123" http://localhost:8000/api/users
+
+# The backend will echo it back in logs and response
+```
+
 ## What's Happening?
 
 ```
@@ -162,12 +187,13 @@ In the backend terminal, you'll see:
 
 ### What the Logs Tell You:
 
-- **trace_id**: Unique identifier for request tracing (will be used in Phase 2 Part 4)
+- **trace_id**: Unique 128-bit identifier for tracking requests across services
 - **method**: HTTP method (GET, POST, etc.)
 - **path**: Request path
 - **status**: HTTP status code (200, 404, 500, etc.)
 - **latency_ms**: Time taken to process the request
 - **timestamp**: ISO8601 formatted timestamp
+- **remote_addr**: Client IP address
 
 ## Configuration
 
@@ -217,13 +243,28 @@ Edit `config/proxy.yaml` to change:
 - ✅ **Order-Aware Composition** - Reverse loop to apply middleware in correct order
 - ✅ **Graceful Degradation** - Return 500 on panic, log details, keep serving
 
-## Next Steps: Phase 2 - Observability (Continued)
+### Phase 2 Part 4: Distributed Tracing ✅
 
-### Phase 2 Part 4: Distributed Tracing 📍 NEXT
+- ✅ **Trace ID Generation** - Using `crypto/rand` for cryptographically secure 128-bit IDs
+- ✅ **Header Propagation** - `X-Trace-ID` header forwarded to backend services
+- ✅ **Request Correlation** - Track requests across multiple services with unique IDs
+- ✅ **Response Headers** - Return trace ID to clients for debugging
+- ✅ **Logging Integration** - All logs include trace_id field for request correlation
+- ✅ **Fallback Mechanism** - Timestamp-based fallback if crypto/rand fails
 
-- Generate unique trace IDs
-- Inject trace IDs into request headers
-- Track requests across multiple services
+## Next Steps: Phase 3 - gRPC Control Plane
+
+### Phase 3 Part 1: gRPC API Definition 📍 NEXT
+
+- Define Protocol Buffer schemas for configuration
+- Generate Go code from .proto files
+- Design control plane API (GetConfig, UpdateConfig, etc.)
+
+### Phase 3 Part 2: Control Plane Server
+
+- Implement gRPC server for control plane
+- Dynamic configuration management
+- Hot reload without proxy restart
 
 ## Troubleshooting
 
@@ -270,11 +311,16 @@ curl -X POST http://localhost:8000/api/data -d '{"key":"value"}'
 Understanding the request flow through our middleware chain:
 
 ```
-Request from Client
+Request from Client (with optional X-Trace-ID header)
         ↓
 ┌───────────────────────────┐
 │  RecoveryMiddleware       │  ← OUTERMOST: Catches ALL panics (defer/recover)
 │  (panic safety)           │
+└───────────────────────────┘
+        ↓
+┌───────────────────────────┐
+│  TracingMiddleware        │  ← Generates/extracts trace ID
+│  (distributed tracing)    │     Sets X-Trace-ID header in request & response
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
@@ -283,21 +329,21 @@ Request from Client
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
-│  LoggingMiddleware        │  ← Logs "request started"
+│  LoggingMiddleware        │  ← Logs "request started" with trace_id
 │  (structured logging)     │
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
-│  ProxyHandler             │  ← Forwards to backend (httputil.ReverseProxy)
+│  ProxyHandler             │  ← Forwards to backend with X-Trace-ID header
 │  (httputil.ReverseProxy)  │
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
-│  Backend Service :3000    │  ← Processes request, returns response
+│  Backend Service :3000    │  ← Receives trace ID, echoes in logs & response
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
-│  LoggingMiddleware        │  ← Logs "request completed" with status & latency
+│  LoggingMiddleware        │  ← Logs "request completed" with trace_id
 │  (calculates latency)     │
 └───────────────────────────┘
         ↓
@@ -307,20 +353,26 @@ Request from Client
 └───────────────────────────┘
         ↓
 ┌───────────────────────────┐
-│  RecoveryMiddleware       │  ← If panic occurred, catches it here
-│  (returns 500 if panic)   │     Logs with stack trace, returns 500
+│  TracingMiddleware        │  ← X-Trace-ID already set in response header
+│  (trace ID in response)   │
 └───────────────────────────┘
         ↓
-Response to Client
+┌───────────────────────────┐
+│  RecoveryMiddleware       │  ← If panic occurred, catches it here
+│  (returns 500 if panic)   │     Logs with stack trace & trace_id, returns 500
+└───────────────────────────┘
+        ↓
+Response to Client (with X-Trace-ID header)
 ```
 
 ### Middleware Order Matters!
 
 The order of middleware is critical:
 1. **Recovery** (outermost) - Must catch panics from ALL inner middleware
-2. **Metrics** - Track all requests (even if they panic)
-3. **Logging** - Log all requests (even if they panic)
-4. **Proxy Handler** - The actual reverse proxy logic
+2. **Tracing** - Generate/extract trace ID early so all inner middleware can use it
+3. **Metrics** - Track all requests (even if they panic)
+4. **Logging** - Log all requests with trace ID (even if they panic)
+5. **Proxy Handler** - The actual reverse proxy logic
 
 ### The Chain Function
 
@@ -329,13 +381,15 @@ Using the Chain helper makes middleware composition clean and readable:
 ```go
 // Before: Manual nesting (hard to read)
 handler = RecoveryMiddleware(logger,
-    MetricsMiddleware(metrics,
-        LoggingMiddleware(logger, handler)))
+    TracingMiddleware(
+        MetricsMiddleware(metrics,
+            LoggingMiddleware(logger, handler))))
 
 // After: Chain function (clean & clear)
 handler = Chain(handler,
     RecoveryMiddleware(logger),    // First = outermost
-    MetricsMiddleware(metrics),    // Middle
+    TracingMiddleware(),           // Second
+    MetricsMiddleware(metrics),    // Third
     LoggingMiddleware(logger),     // Last = innermost
 )
 ```
@@ -352,7 +406,7 @@ func Chain(handler http.Handler, middlewares ...func(http.Handler) http.Handler)
 }
 ```
 
-This produces: `Recovery(Metrics(Logging(handler)))`
+This produces: `Recovery(Tracing(Metrics(Logging(handler))))`
 
 ### Before vs After Logging
 
@@ -362,11 +416,11 @@ This produces: `Recovery(Metrics(Logging(handler)))`
 [INFO] Forwarding: GET /api/users → localhost:3000
 ```
 
-**Phase 2 Part 1 (Structured Logging):**
+**Phase 2 Part 1-4 (Structured Logging + Tracing):**
 
 ```json
-{"level":"info","timestamp":"2026-01-25T10:30:05.200Z","msg":"Request starter","trace_id":"none","method":"GET","path":"/api/users","remote_addr":"127.0.0.1:53242"}
-{"level":"info","timestamp":"2026-01-25T10:30:05.245Z","msg":"request completed","method":"GET","path":"/api/users","status":200,"latency_ms":"45ms","trace_id":"none"}
+{"level":"info","timestamp":"2026-01-26T10:30:05.200Z","msg":"Request starter","trace_id":"a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6","method":"GET","path":"/api/users","remote_addr":"127.0.0.1:53242"}
+{"level":"info","timestamp":"2026-01-26T10:30:05.245Z","msg":"request completed","method":"GET","path":"/api/users","status":200,"latency_ms":"45ms","trace_id":"a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"}
 ```
 
 The structured logs are:
@@ -450,6 +504,78 @@ curl http://localhost:8000/panic
 - ❌ One bad request → entire proxy down → manual restart
 - ✅ One bad request → 500 error → logged → proxy still running
 
+### Distributed Tracing with Trace IDs
+
+Every request gets a unique trace ID that follows it through your entire system:
+
+```bash
+# Make a request
+curl -v http://localhost:8000/api/users
+```
+
+**1. Proxy receives request:**
+```json
+{"level":"info","msg":"Request starter","trace_id":"a1b2c3d4...","method":"GET","path":"/api/users"}
+```
+
+**2. Backend receives trace ID:**
+```
+[BACKEND] Received: GET /api/users | Trace-ID: a1b2c3d4...
+```
+
+**3. Backend returns response with trace ID:**
+```json
+{
+  "message": "Hello from the backend service!",
+  "trace_id": "a1b2c3d4...",
+  ...
+}
+```
+
+**4. Client receives trace ID in header:**
+```
+< X-Trace-ID: a1b2c3d4...
+```
+
+**Why This Matters:**
+
+In a microservices architecture with multiple services:
+```
+Client → Proxy → Service A → Service B → Service C
+```
+
+**Without trace IDs:**
+- ❌ Logs scattered across services
+- ❌ Can't correlate which logs belong to same request
+- ❌ Hard to debug issues spanning multiple services
+- ❌ No visibility into request flow
+
+**With trace IDs:**
+- ✅ One ID tracks request through entire system
+- ✅ Search logs for `trace_id: a1b2c3d4...` across all services
+- ✅ See complete request journey
+- ✅ Identify exactly where failures occurred
+- ✅ Measure end-to-end latency
+
+**Example debugging scenario:**
+```bash
+# User reports error, provides trace ID from response
+# Search all logs for this trace ID:
+
+# Proxy logs:
+{"trace_id":"abc123","msg":"Request starter","path":"/api/order"}
+{"trace_id":"abc123","msg":"request completed","status":500}
+
+# Service A logs:
+{"trace_id":"abc123","msg":"processing order","order_id":42}
+{"trace_id":"abc123","msg":"calling payment service"}
+
+# Service B logs:
+{"trace_id":"abc123","error":"payment declined"}  ← Found the issue!
+```
+
+This is the foundation of observability in distributed systems!
+
 ---
 
 ## Complete Roadmap
@@ -480,10 +606,12 @@ curl http://localhost:8000/panic
 - Stack trace logging for debugging
 - Resilient proxy that doesn't crash on panics
 
-### Phase 2 Part 4: Distributed Tracing
+### ✅ Phase 2 Part 4: Distributed Tracing (Complete)
 
-- Trace ID generation
-- Cross-service request tracking
+- Cryptographically secure trace ID generation (128-bit)
+- X-Trace-ID header propagation to backend services
+- Trace ID included in all logs for request correlation
+- Response headers include trace ID for client debugging
 
 ### Phase 3: Control Plane with gRPC
 
