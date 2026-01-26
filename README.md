@@ -8,7 +8,8 @@ GoMesh is a lightweight HTTP reverse proxy written in Go. It sits in front of ba
 - Graceful shutdown on SIGINT / SIGTERM
 - Structured logging (Zap)
 - Prometheus metrics on `/metrics`
-- Panic recovery middleware (keeps the proxy running on handler panics)
+- Panic recovery middleware
+- Distributed request tracing via `X-Trace-ID`
 
 ## Requirements
 
@@ -23,6 +24,7 @@ GoMesh/
 │   └── backend/
 ├── pkg/
 │   ├── logging/
+│   ├── tracing/    # Trace ID generation and helpers
 │   └── proxy/
 ├── config/proxy.yaml
 ├── Makefile
@@ -37,16 +39,25 @@ go mod download
 go run cmd/backend/main.go
 go run cmd/proxy/main.go
 
-curl http://localhost:8000/api/users
-curl http://localhost:8000/metrics
+curl -v http://localhost:8000/api/users
+# Response includes X-Trace-ID
 
-# intentional panic endpoint (proxy returns 500 and keeps running)
+curl -H "X-Trace-ID: my-custom-trace-123" http://localhost:8000/api/users
+curl http://localhost:8000/metrics
 curl http://localhost:8000/panic
 ```
 
+## Observability
+
+- **Logs**: structured fields including `trace_id`, method, path, status, latency
+- **Metrics**: `gomesh_requests_total`, `gomesh_request_duration_seconds`, `gomesh_requests_in_flight`, `gomesh_errors_total`
+- **Tracing**: generate or accept `X-Trace-ID`, propagate to backends, return on the response
+
 ## Middleware stack
 
-Requests pass through recovery, metrics, and logging middleware before the reverse proxy handler. Recovery is outermost so panics from any inner layer are caught.
+```
+Recovery → Tracing → Metrics → Logging → ReverseProxy
+```
 
 ## Configuration
 
@@ -60,4 +71,4 @@ make build
 
 ## License
 
-See [LICENSE](LICENSE) when present.
+MIT (see [LICENSE](LICENSE)).

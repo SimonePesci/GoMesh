@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/SimonePesci/gomesh/pkg/logging"
+	"github.com/SimonePesci/gomesh/pkg/tracing"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +47,27 @@ func (rw *responseWriter) Write(data []byte) (int, error) {
 	return rw.ResponseWriter.Write(data)
 }
 
+func TracingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		traceID := tracing.GetTraceID(r)
+		// If the trace ID is unknown, it means it's the first request
+		// so we generate a new trace ID and set it in the request header
+		if traceID == "unknown" {
+			traceID = tracing.GenerateTraceID()
+			tracing.SetTraceID(r, traceID)
+		}
+
+		// Set the trace ID in the response header
+		// So the client can use it to trace the request
+		tracing.SetTraceIDResponse(w, traceID)
+
+		// Call the next handler
+		next.ServeHTTP(w, r)
+
+	})
+}
+
 func LoggingMiddleware(logger *logging.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Record Start Time
@@ -53,10 +75,7 @@ func LoggingMiddleware(logger *logging.Logger, next http.Handler) http.Handler {
 
 		wrappedWriter := newResponseWriter(w)
 
-		traceID := r.Header.Get("X-Trace-ID")
-		if traceID == "" {
-			traceID = "none"
-		}
+		traceID := tracing.GetTraceID(r)
 
 
 		logger.Info("Request starter",	
@@ -122,7 +141,12 @@ func RecoveryMiddleware(logging *logging.Logger, next http.Handler) http.Handler
 		defer func() {
 			// Log the panic with stack trace
 			if err := recover(); err != nil {
+
+
+				traceID := tracing.GetTraceID(r)
+
 				logging.Error("panic recovered",
+					zap.String("trace_id", traceID),
 					zap.Any("error", err),
 					zap.String("path", r.URL.Path),
 					zap.String("method", r.Method),
