@@ -1,19 +1,20 @@
 # GoMesh
 
-GoMesh is a lightweight HTTP reverse proxy written in Go. It sits in front of backend services, forwards traffic, and is the foundation for a small service mesh (data plane + control plane).
+GoMesh is a lightweight service mesh written in Go. The data plane is an HTTP reverse proxy with logging, metrics, recovery, and tracing. The control plane API is defined with gRPC and Protocol Buffers for proxy registration and configuration streaming.
 
 ## Features
 
 - HTTP reverse proxy with YAML configuration
-- Graceful shutdown on SIGINT / SIGTERM
 - Structured logging (Zap)
-- Prometheus metrics on `/metrics`
+- Prometheus metrics (`/metrics`)
 - Panic recovery middleware
-- Distributed request tracing via `X-Trace-ID`
+- Request tracing (`X-Trace-ID`)
+- gRPC API contract for control plane ↔ data plane communication
 
 ## Requirements
 
 - Go 1.24+
+- Optional: `protoc` and Go plugins to regenerate stubs
 
 ## Project layout
 
@@ -24,8 +25,13 @@ GoMesh/
 │   └── backend/
 ├── pkg/
 │   ├── logging/
-│   ├── tracing/    # Trace ID generation and helpers
+│   ├── tracing/
 │   └── proxy/
+├── api/proto/
+│   ├── mesh.proto
+│   ├── mesh.pb.go
+│   └── mesh_grpc.pb.go
+├── scripts/generate-proto.sh
 ├── config/proxy.yaml
 ├── Makefile
 └── go.mod
@@ -40,35 +46,37 @@ go run cmd/backend/main.go
 go run cmd/proxy/main.go
 
 curl -v http://localhost:8000/api/users
-# Response includes X-Trace-ID
-
-curl -H "X-Trace-ID: my-custom-trace-123" http://localhost:8000/api/users
 curl http://localhost:8000/metrics
-curl http://localhost:8000/panic
 ```
+
+## gRPC API
+
+`api/proto/mesh.proto` defines `MeshControl`:
+
+| RPC | Type | Purpose |
+|---|---|---|
+| `RegisterProxy` | unary | Proxy registers with the control plane |
+| `StreamConfig` | server streaming | Control plane pushes config updates |
+
+Regenerate code after editing the proto:
+
+```bash
+# protoc + protoc-gen-go + protoc-gen-go-grpc required
+bash scripts/generate-proto.sh
+```
+
+Do not edit the generated `.pb.go` files by hand.
 
 ## Observability
 
-- **Logs**: structured fields including `trace_id`, method, path, status, latency
-- **Metrics**: `gomesh_requests_total`, `gomesh_request_duration_seconds`, `gomesh_requests_in_flight`, `gomesh_errors_total`
-- **Tracing**: generate or accept `X-Trace-ID`, propagate to backends, return on the response
-
-## Middleware stack
-
-```
-Recovery → Tracing → Metrics → Logging → ReverseProxy
-```
+- Structured logs with `trace_id`
+- Prometheus endpoint at `/metrics`
+- `X-Trace-ID` propagation
 
 ## Configuration
 
 Edit `config/proxy.yaml` for listen port, backend address, and timeouts.
 
-## Build
-
-```bash
-make build
-```
-
 ## License
 
-MIT (see [LICENSE](LICENSE)).
+MIT. See [LICENSE](LICENSE).
