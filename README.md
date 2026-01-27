@@ -2,7 +2,7 @@
 
 A high-performance, distributed Service Mesh with a gRPC Control Plane built from scratch in Go.
 
-## Current Status: Phase 2 Part 4 - Distributed Tracing ✅
+## Current Status: Phase 3 Part 1 - gRPC API Definition ✅
 
 ### What's Complete:
 
@@ -11,10 +11,11 @@ A high-performance, distributed Service Mesh with a gRPC Control Plane built fro
 - ✅ **Phase 2 Part 2**: Prometheus metrics with `/metrics` endpoint
 - ✅ **Phase 2 Part 3**: Recovery middleware and middleware chaining
 - ✅ **Phase 2 Part 4**: Distributed tracing with unique trace IDs
+- ✅ **Phase 3 Part 1**: Protocol Buffer API definition and code generation
 
 ### Next Up:
 
-- 📍 **Phase 3**: gRPC Control Plane for dynamic configuration
+- 📍 **Phase 3 Part 2**: Control Plane Server implementation
 
 ## Project Structure
 
@@ -36,6 +37,13 @@ GoMesh/
 │       ├── middleware.go   # All middleware (logging, metrics, tracing, recovery)
 │       ├── metrics.go      # Prometheus metrics (Phase 2 Part 2)
 │       └── server.go       # HTTP server
+├── api/
+│   └── proto/              # gRPC API definitions (Phase 3 Part 1)
+│       ├── mesh.proto      # Protocol Buffer definitions
+│       ├── mesh.pb.go      # Generated: message types
+│       └── mesh_grpc.pb.go # Generated: gRPC service interfaces
+├── scripts/
+│   └── generate-proto.sh   # Script to generate Go code from .proto files
 ├── config/
 │   └── proxy.yaml          # Proxy configuration
 ├── go.mod
@@ -146,6 +154,43 @@ curl -H "X-Trace-ID: my-custom-trace-123" http://localhost:8000/api/users
 # The backend will echo it back in logs and response
 ```
 
+## Working with Protocol Buffers (gRPC)
+
+### Prerequisites
+
+Install the Protocol Buffer compiler and Go plugins:
+
+```bash
+# Install protoc compiler
+# macOS:
+brew install protobuf
+
+# Linux:
+# apt install -y protobuf-compiler
+
+# Install Go plugins for protoc
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+# Verify installation
+protoc --version  # Should show libprotoc 3.x or higher
+```
+
+### Generating Go Code from .proto Files
+
+Whenever you modify [api/proto/mesh.proto](api/proto/mesh.proto), regenerate the Go code:
+
+```bash
+# Run the generation script
+bash scripts/generate-proto.sh
+
+# This generates:
+# - api/proto/mesh.pb.go        (message types: ProxyInfo, ConfigUpdate, etc.)
+# - api/proto/mesh_grpc.pb.go   (gRPC service interfaces: MeshControlServer, MeshControlClient)
+```
+
+**Important**: Never manually edit the generated `.pb.go` files. Always edit the `.proto` file and regenerate.
+
 ## What's Happening?
 
 ```
@@ -252,19 +297,33 @@ Edit `config/proxy.yaml` to change:
 - ✅ **Logging Integration** - All logs include trace_id field for request correlation
 - ✅ **Fallback Mechanism** - Timestamp-based fallback if crypto/rand fails
 
-## Next Steps: Phase 3 - gRPC Control Plane
+### Phase 3 Part 1: gRPC API Definition ✅
 
-### Phase 3 Part 1: gRPC API Definition 📍 NEXT
+- ✅ **Protocol Buffers** - Defined API contract in `mesh.proto` using proto3 syntax
+- ✅ **Service Definition** - `MeshControl` service with RegisterProxy and StreamConfig RPCs
+- ✅ **Message Types** - ProxyInfo, ConfigUpdate, Route, RegistrationResponse messages
+- ✅ **Code Generation** - Automated Go code generation with `protoc` compiler
+- ✅ **Unary RPC** - RegisterProxy for simple request-response pattern
+- ✅ **Server Streaming** - StreamConfig for long-lived config update streams
+- ✅ **Build Script** - `generate-proto.sh` for reproducible code generation
 
-- Define Protocol Buffer schemas for configuration
-- Generate Go code from .proto files
-- Design control plane API (GetConfig, UpdateConfig, etc.)
+## Next Steps: Phase 3 - gRPC Control Plane (Continued)
 
-### Phase 3 Part 2: Control Plane Server
+### Phase 3 Part 2: Control Plane Server 📍 NEXT
 
-- Implement gRPC server for control plane
-- Dynamic configuration management
-- Hot reload without proxy restart
+- Implement gRPC server (MeshControlServer interface)
+- Handle RegisterProxy RPC - track connected proxies
+- Handle StreamConfig RPC - push config updates to proxies
+- Configuration storage and versioning
+- API for updating routes dynamically
+
+### Phase 3 Part 3: Proxy gRPC Client
+
+- Implement gRPC client in proxy
+- Connect to control plane on startup
+- Subscribe to config updates via StreamConfig
+- Hot reload configuration without restart
+- Fallback to YAML config if control plane unavailable
 
 ## Troubleshooting
 
@@ -576,6 +635,93 @@ Client → Proxy → Service A → Service B → Service C
 
 This is the foundation of observability in distributed systems!
 
+### gRPC Control Plane Architecture
+
+The control plane allows dynamic configuration of proxies without restarts:
+
+```
+┌─────────────────────────────────────────────────┐
+│          Control Plane (Port 9000)              │
+│                                                  │
+│  - Stores routing configuration                 │
+│  - Tracks all registered proxies                │
+│  - Pushes updates via gRPC streaming            │
+│                                                  │
+│  gRPC Server implements:                        │
+│    • RegisterProxy(ProxyInfo)                   │
+│    • StreamConfig(ProxyInfo) returns stream     │
+└─────────────────────────────────────────────────┘
+       ▲                    ▲                    ▲
+       │ gRPC Stream        │ gRPC Stream        │ gRPC Stream
+       │ (long-lived)       │ (long-lived)       │ (long-lived)
+       │                    │                    │
+   ┌────────┐          ┌────────┐          ┌────────┐
+   │Proxy 1 │          │Proxy 2 │          │Proxy 3 │
+   │ :8000  │          │ :8001  │          │ :8002  │
+   └────────┘          └────────┘          └────────┘
+```
+
+**How it works:**
+
+1. **Proxy starts** → Calls `RegisterProxy()` → Control plane tracks it
+2. **Proxy subscribes** → Calls `StreamConfig()` → Opens long-lived stream
+3. **Control plane streams config** → Sends `ConfigUpdate` → Proxy receives routes
+4. **Admin updates config** → Control plane sends new `ConfigUpdate` → All proxies update instantly!
+
+**Protocol Buffers (.proto file):**
+
+The [mesh.proto](api/proto/mesh.proto) file defines the API contract:
+
+```protobuf
+service MeshControl {
+    // Unary RPC: single request → single response
+    rpc RegisterProxy(ProxyInfo) returns (RegistrationResponse);
+
+    // Server Streaming RPC: single request → stream of responses
+    rpc StreamConfig(ProxyInfo) returns (stream ConfigUpdate);
+}
+
+message ProxyInfo {
+    string proxy_id = 1;        // e.g., "proxy-1"
+    string version = 2;         // e.g., "1.0.0"
+    string listen_addr = 3;     // e.g., "0.0.0.0:8000"
+}
+
+message ConfigUpdate {
+    int64 version = 1;          // Config version (increments)
+    repeated Route routes = 2;  // List of routes
+}
+
+message Route {
+    string path = 1;            // e.g., "/api/users"
+    string backend = 2;         // e.g., "localhost:3000"
+    bool auth_required = 3;     // Require auth?
+    int32 timeout_ms = 4;       // Request timeout
+}
+```
+
+**Why gRPC over REST?**
+
+| Feature | gRPC | REST |
+|---------|------|------|
+| **Format** | Binary (Protocol Buffers) | Text (JSON) |
+| **Speed** | Fast (binary encoding) | Slower (JSON parsing) |
+| **Streaming** | Built-in bidirectional streaming | Difficult (SSE/WebSockets) |
+| **Type Safety** | Strong (generated code) | Weak (manual parsing) |
+| **HTTP** | HTTP/2 (multiplexed) | HTTP/1.1 (one request at a time) |
+
+**Before (Static YAML):**
+- ❌ Edit `config/proxy.yaml` file
+- ❌ Restart proxy to apply changes
+- ❌ Each proxy has its own file
+- ❌ No central management
+
+**After (Dynamic gRPC):**
+- ✅ Control plane API to update config
+- ✅ Proxies receive updates via stream
+- ✅ No restarts needed
+- ✅ Centralized configuration
+
 ---
 
 ## Complete Roadmap
@@ -613,12 +759,25 @@ This is the foundation of observability in distributed systems!
 - Trace ID included in all logs for request correlation
 - Response headers include trace ID for client debugging
 
-### Phase 3: Control Plane with gRPC
+### ✅ Phase 3 Part 1: gRPC API Definition (Complete)
 
-- gRPC API definition
-- Control plane server
-- Dynamic configuration
-- Hot reload
+- Protocol Buffer API definition in mesh.proto
+- MeshControl service with RegisterProxy and StreamConfig RPCs
+- Message types for proxy info, config updates, and routes
+- Automated code generation with protoc
+- Build script for reproducible generation
+
+### Phase 3 Part 2: Control Plane Server
+
+- Implement gRPC server
+- Handle proxy registration and config streaming
+- Dynamic configuration management
+
+### Phase 3 Part 3: Proxy gRPC Client
+
+- Connect proxy to control plane
+- Subscribe to config updates
+- Hot reload without restart
 
 ### Phase 4: Service Discovery & Load Balancing
 
