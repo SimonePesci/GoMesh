@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package mesh;
+
+option go_package = "github.com/SimonePesci/gomesh/api/proto";
+
+// MeshControl is the service that manages the data plane proxies
+// Control Plane implements this server
+// Data Plane proxies are clients
+service MeshControl {
+    // StreamConfig establishes a long-lived connection between proxy and control plane
+    // The proxy sends its info, and the control plane streams config updates
+    // This is a SERVER STREAMING RPC - server sends multiple messages
+    // Control Plane -> Proxy: StreamConfig ... Control Plane sends multiple messages
+    rpc StreamConfig(ProxyInfo) returns (stream ConfigUpdate);
+    
+    // RegisterProxy allows a proxy to register itself with the control plane
+    // This is a UNARY RPC - single request, single response
+    // Proxy -> Control Plane: RegisterProxy
+    rpc RegisterProxy(ProxyInfo) returns (RegistrationResponse);
+}
+
+// ProxyInfo contains information about a data plane proxy
+message ProxyInfo {
+    string proxy_id = 1;        // Unique ID for this proxy (e.g., "proxy-1", "events-proxy")
+    string version = 2;          // Proxy version (e.g., "1.0.0")
+    string listen_addr = 3;      // Address proxy is listening on (e.g., "0.0.0.0:8000")
+}
+
+// RegistrationResponse is sent when a proxy successfully registers
+message RegistrationResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// ConfigUpdate contains routing configuration updates
+// This is what the control plane sends to proxies
+message ConfigUpdate {
+    int64 version = 1;           // Config version number (increments with each update)
+    repeated Route routes = 2;   // List of routing rules
+}
+
+// Route defines how to route requests
+message Route {
+    string path = 1;             // Path pattern (e.g., "/api/users", "/api/events")
+    string backend = 2;          // Backend address (e.g., "localhost:3000", "users-service:5000")
+    bool auth_required = 3;      // Whether this route requires authentication
+    int32 timeout_ms = 4;        // Request timeout in milliseconds
+}
