@@ -2,7 +2,7 @@
 
 A high-performance, distributed Service Mesh with a gRPC Control Plane built from scratch in Go.
 
-## Current Status: Phase 3 Part 1 - gRPC API Definition ✅
+## Current Status: Phase 3 Part 2 - Control Plane Server ✅
 
 ### What's Complete:
 
@@ -12,17 +12,20 @@ A high-performance, distributed Service Mesh with a gRPC Control Plane built fro
 - ✅ **Phase 2 Part 3**: Recovery middleware and middleware chaining
 - ✅ **Phase 2 Part 4**: Distributed tracing with unique trace IDs
 - ✅ **Phase 3 Part 1**: Protocol Buffer API definition and code generation
+- ✅ **Phase 3 Part 2**: Control Plane Server with gRPC
 
 ### Next Up:
 
-- 📍 **Phase 3 Part 2**: Control Plane Server implementation
+- 📍 **Phase 3 Part 3**: Proxy gRPC Client integration
 
 ## Project Structure
 
 ```
 GoMesh/
 ├── cmd/
-│   ├── proxy/              # Main proxy binary
+│   ├── proxy/              # Data plane proxy binary
+│   │   └── main.go
+│   ├── controller/         # Control plane binary (Phase 3 Part 2)
 │   │   └── main.go
 │   └── backend/            # Test backend service
 │       └── main.go
@@ -31,6 +34,9 @@ GoMesh/
 │   │   └── logging.go      # Zap logger wrapper
 │   ├── tracing/            # Distributed tracing (Phase 2 Part 4)
 │   │   └── tracer.go       # Trace ID generation and propagation
+│   ├── controlplane/       # Control plane logic (Phase 3 Part 2)
+│   │   ├── server.go       # gRPC server implementation
+│   │   └── config.go       # Configuration store with versioning
 │   └── proxy/              # Proxy package
 │       ├── config.go       # Configuration loader
 │       ├── handler.go      # Reverse proxy logic
@@ -74,7 +80,27 @@ You should see:
 [BACKEND] Ready to receive requests from the proxy
 ```
 
-### Step 3: Start the Proxy
+### Step 3: Start the Control Plane (Optional - Phase 3)
+
+In another terminal:
+
+```bash
+go run cmd/controller/main.go
+```
+
+You should see:
+
+```
+INFO    Control Plane starting...       {"port": 9090, "production": false}
+INFO    gRPC server registered
+INFO    control plane listening at      {"address": "[::]:9090"}
+```
+
+**Flags:**
+- `-port`: Control plane port (default: 9090)
+- `-production`: Use production logging (JSON) instead of development
+
+### Step 4: Start the Proxy
 
 In another terminal:
 
@@ -91,9 +117,9 @@ You should see (structured JSON logs):
 {"level":"info","timestamp":"2026-01-25T...","msg":"Press Ctrl+C to stop"}
 ```
 
-### Step 4: Test It!
+### Step 5: Test It!
 
-In a third terminal:
+In a fourth terminal:
 
 ```bash
 # Send a request to the proxy
@@ -108,7 +134,7 @@ curl http://localhost:8000/api/users
 # }
 ```
 
-### Step 5: Check Metrics!
+### Step 6: Check Metrics!
 
 ```bash
 # View Prometheus metrics
@@ -120,7 +146,7 @@ curl http://localhost:8000/metrics
 # gomesh_requests_in_flight 0
 ```
 
-### Step 6: Test Recovery Middleware!
+### Step 7: Test Recovery Middleware!
 
 ```bash
 # Trigger a panic in the backend (proxy should handle it gracefully)
@@ -132,7 +158,7 @@ curl http://localhost:8000/panic
 # - Proxy KEEPS RUNNING (doesn't crash!) ✅
 ```
 
-### Step 7: Test Distributed Tracing!
+### Step 8: Test Distributed Tracing!
 
 ```bash
 # Make a request and check the trace ID in the response headers
@@ -153,6 +179,44 @@ curl -H "X-Trace-ID: my-custom-trace-123" http://localhost:8000/api/users
 
 # The backend will echo it back in logs and response
 ```
+
+### Step 9: Test the Control Plane! (Phase 3)
+
+The control plane is now running and ready to manage proxy configurations:
+
+**Check Control Plane Logs:**
+
+When you start the control plane, you should see:
+
+```
+INFO    Control Plane starting...       {"port": 9090, "production": false}
+INFO    gRPC server registered
+INFO    control plane listening at      {"address": "[::]:9090"}
+```
+
+**What's Happening:**
+
+The control plane is:
+- ✅ Listening on port 9090 for gRPC connections
+- ✅ Ready to accept proxy registrations
+- ✅ Ready to stream configuration updates
+- ✅ Storing a default route configuration (path: "/", backend: "localhost:3000")
+
+**Current Features:**
+
+1. **Proxy Registration**: Tracks connected proxies with unique IDs
+2. **Config Streaming**: Sends initial config (version 1) to newly connected proxies
+3. **Versioned Config**: Auto-increments version on each update
+4. **Thread-Safe**: Handles concurrent proxy connections safely
+5. **Graceful Shutdown**: Cleanly closes all proxy connections on SIGINT/SIGTERM
+
+**Next Phase (Part 3):**
+
+Once the proxy gRPC client is implemented, you'll be able to:
+- Connect proxies to the control plane on startup
+- Receive config updates without restarting proxies
+- Dynamically add/update/remove routes
+- See real-time config propagation across all proxies
 
 ## Working with Protocol Buffers (gRPC)
 
@@ -307,17 +371,50 @@ Edit `config/proxy.yaml` to change:
 - ✅ **Server Streaming** - StreamConfig for long-lived config update streams
 - ✅ **Build Script** - `generate-proto.sh` for reproducible code generation
 
+### Phase 3 Part 2: Control Plane Server ✅
+
+- ✅ **gRPC Server** - Implemented `MeshControlServer` interface with gRPC
+- ✅ **RegisterProxy RPC** - Tracks connected proxies in memory with unique proxy IDs
+- ✅ **StreamConfig RPC** - Long-lived server streaming for pushing config updates to proxies
+- ✅ **ConfigStore** - Versioned configuration storage with thread-safe access
+  - Default route to `localhost:3000` backend
+  - `UpdateConfig()` to replace entire config
+  - `AddRoute()` to append new routes
+  - Auto-incrementing version numbers on updates
+- ✅ **RWMutex** - Reader-writer locks for concurrent access patterns
+  - Read locks for `GetConfig()` and listing proxies
+  - Write locks for updates and proxy registration
+- ✅ **BroadcastConfigUpdate** - Push updates to all connected proxies simultaneously
+- ✅ **Graceful Shutdown** - Signal handling (SIGINT, SIGTERM) for clean termination
+- ✅ **Connection Management** - Automatic cleanup with `defer` when proxy disconnects
+- ✅ **Structured Logging** - Zap logger with development/production modes
+  - Development: Human-readable console output
+  - Production: Structured JSON logs
+
+**Implementation Details:**
+
+The control plane runs as a standalone binary ([cmd/controller/main.go](cmd/controller/main.go)) that:
+1. Listens on port 9090 (configurable via `-port` flag)
+2. Accepts proxy registrations and stores proxy info (ID, version, listen address)
+3. Opens long-lived gRPC streams to send config updates
+4. Maintains a `map[string]*ProxyConnection` to track all connected proxies
+5. Sends initial config immediately when a proxy connects via `StreamConfig()`
+6. Keeps connections alive and cleans up when proxies disconnect
+
+The configuration store ([pkg/controlplane/config.go](pkg/controlplane/config.go)) manages:
+- Routing rules with path, backend, auth requirements, and timeouts
+- Version tracking (incremented on every update)
+- Thread-safe concurrent access with `sync.RWMutex`
+
+The gRPC server ([pkg/controlplane/server.go](pkg/controlplane/server.go)) implements:
+- `RegisterProxy(ProxyInfo) → RegistrationResponse` - Unary RPC for registration
+- `StreamConfig(ProxyInfo) → stream ConfigUpdate` - Server streaming for config push
+- `BroadcastConfigUpdate(ConfigUpdate)` - Internal method to push updates to all proxies
+- `GetConnectedProxies() → []*ProxyInfo` - Helper to list all connected proxies
+
 ## Next Steps: Phase 3 - gRPC Control Plane (Continued)
 
-### Phase 3 Part 2: Control Plane Server 📍 NEXT
-
-- Implement gRPC server (MeshControlServer interface)
-- Handle RegisterProxy RPC - track connected proxies
-- Handle StreamConfig RPC - push config updates to proxies
-- Configuration storage and versioning
-- API for updating routes dynamically
-
-### Phase 3 Part 3: Proxy gRPC Client
+### Phase 3 Part 3: Proxy gRPC Client 📍 NEXT
 
 - Implement gRPC client in proxy
 - Connect to control plane on startup
@@ -665,8 +762,24 @@ The control plane allows dynamic configuration of proxies without restarts:
 
 1. **Proxy starts** → Calls `RegisterProxy()` → Control plane tracks it
 2. **Proxy subscribes** → Calls `StreamConfig()` → Opens long-lived stream
-3. **Control plane streams config** → Sends `ConfigUpdate` → Proxy receives routes
-4. **Admin updates config** → Control plane sends new `ConfigUpdate` → All proxies update instantly!
+3. **Control plane streams config** → Sends initial `ConfigUpdate` (version 1) → Proxy receives routes
+4. **Proxy applies config** → Updates routing table without restart
+5. **Admin updates config** → Control plane calls `BroadcastConfigUpdate()` → All proxies receive new config instantly!
+
+**Current Implementation Status:**
+
+Phase 3 Part 2 (Control Plane Server) is complete with:
+- ✅ gRPC server running on port 9090
+- ✅ Proxy registration and tracking
+- ✅ Initial config streaming to proxies
+- ✅ Config store with default route to localhost:3000
+- ✅ Thread-safe concurrent access
+- ✅ Graceful shutdown
+
+**What's Coming Next (Phase 3 Part 3):**
+- Proxy gRPC client to connect to control plane
+- Hot reload of configuration in proxy
+- Fallback to YAML config if control plane unavailable
 
 **Protocol Buffers (.proto file):**
 
@@ -767,11 +880,17 @@ message Route {
 - Automated code generation with protoc
 - Build script for reproducible generation
 
-### Phase 3 Part 2: Control Plane Server
+### ✅ Phase 3 Part 2: Control Plane Server (Complete)
 
-- Implement gRPC server
-- Handle proxy registration and config streaming
-- Dynamic configuration management
+- ✅ Implement gRPC server with `MeshControlServer` interface
+- ✅ Handle proxy registration via `RegisterProxy()` RPC
+- ✅ Config streaming via `StreamConfig()` server-side streaming RPC
+- ✅ Thread-safe proxy connection tracking with `sync.RWMutex`
+- ✅ Versioned configuration store with `ConfigStore`
+- ✅ Broadcast updates to all connected proxies via `BroadcastConfigUpdate()`
+- ✅ Graceful shutdown with signal handling
+- ✅ Default route configuration (localhost:3000)
+- ✅ Structured logging with Zap (development/production modes)
 
 ### Phase 3 Part 3: Proxy gRPC Client
 
