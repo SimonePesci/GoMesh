@@ -9,8 +9,8 @@ GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-pla
 - Prometheus metrics (`/metrics`)
 - Panic recovery middleware
 - Request tracing (`X-Trace-ID`)
-- gRPC control plane: proxy registration and config streaming
-- Proxy identity and control-plane address in bootstrap config
+- gRPC control plane with proxy registration and config streaming
+- Mandatory control-plane connection and registration before the proxy serves traffic
 
 ## Requirements
 
@@ -21,10 +21,12 @@ GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-pla
 ```
 Client  →  Proxy (:8000)  →  Backend (:3000)
                 ↑
-         gRPC (register + stream)
+         RegisterProxy + StreamConfig
                 │
          Control plane (:9090)
 ```
+
+The proxy fails fast at startup if the control plane is unreachable or registration fails.
 
 ## Project layout
 
@@ -38,7 +40,7 @@ GoMesh/
 │   ├── controlplane/
 │   ├── logging/
 │   ├── tracing/
-│   └── proxy/          # includes control-plane client
+│   └── proxy/
 ├── api/proto/
 ├── scripts/generate-proto.sh
 ├── config/proxy.yaml
@@ -47,6 +49,8 @@ GoMesh/
 ```
 
 ## Quick start
+
+Start components in this order:
 
 ```bash
 go mod download
@@ -57,11 +61,23 @@ go run cmd/proxy/main.go
 
 curl -v http://localhost:8000/api/users
 curl http://localhost:8000/metrics
+curl http://localhost:8000/panic
 ```
 
-## Configuration
+### Controller flags
 
-`config/proxy.yaml`:
+| Flag | Default | Description |
+|---|---|---|
+| `-port` | `9090` | gRPC listen port |
+| `-production` | `false` | JSON logging when true |
+
+### Proxy flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `-config` | `config/proxy.yaml` | Bootstrap config path |
+
+## Configuration
 
 ```yaml
 proxy:
@@ -81,13 +97,19 @@ control_plane:
   address: "localhost:9090"
 ```
 
-Startup validates proxy identity, advertise address, and control-plane address.
+Until dynamic routing is wired end-to-end, request forwarding still uses the static `backend` block. Registration with the control plane is already mandatory.
 
-## Control plane
+## Observability
 
-- gRPC on port `9090` (`-port`, `-production`)
-- `RegisterProxy` / `StreamConfig`
-- Versioned route store with default backend `localhost:3000`
+- Structured logs with `trace_id`
+- Prometheus at `/metrics`
+- `X-Trace-ID` on requests and responses
+
+## Middleware stack
+
+```
+Recovery → Tracing → Metrics → Logging → ReverseProxy
+```
 
 ## Protocol Buffers
 

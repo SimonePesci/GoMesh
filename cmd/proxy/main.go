@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
+const controlPlaneStartupTimeout = 5 * time.Second
 
 func main() {
 
@@ -35,6 +37,43 @@ func main() {
 		)
 	}
 
+	controlPlaneClient := proxy.NewControlPlaneClient(config, logger)
+
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), controlPlaneStartupTimeout)
+	if err := controlPlaneClient.Connect(connectCtx); err != nil {
+		cancelConnect()
+		logger.Fatal("Failed to connect to control plane",
+			zap.String("address", config.ControlPlane.Address),
+			zap.Error(err),
+		)
+	}
+	cancelConnect()
+
+	registerCtx, cancelRegister := context.WithTimeout(context.Background(), controlPlaneStartupTimeout)
+	if _, err := controlPlaneClient.Register(registerCtx); err != nil {
+		cancelRegister()
+
+		if closeErr := controlPlaneClient.Close(); closeErr != nil {
+			logger.Warn("Failed to close control plane client after registration error",
+				zap.Error(closeErr),
+			)
+		}
+
+		logger.Fatal("Failed to register proxy with control plane",
+			zap.String("proxy_id", config.Proxy.ID),
+			zap.Error(err),
+		)
+	}
+	cancelRegister()
+
+	defer func() {
+		if err := controlPlaneClient.Close(); err != nil {
+			logger.Warn("Failed to close control plane client",
+				zap.Error(err),
+			)
+		}
+	}()
+
 	server, err := proxy.NewServer(config, logger)
 	if err != nil {
 		logger.Fatal("Failed to create proxy server",
@@ -52,13 +91,13 @@ func main() {
 
 	// Wait for shutdown: signal or error
 	select {
-	case err := <- serverErrors:
+	case err := <-serverErrors:
 		if err != nil {
 			logger.Fatal("Server error",
 				zap.Error(err),
 			)
 		}
-	case sig := <- signChan:
+	case sig := <-signChan:
 		logger.Info("Received signal",
 			zap.String("signal", sig.String()),
 		)
@@ -69,7 +108,6 @@ func main() {
 			)
 		}
 	}
-
 
 	logger.Info("Proxy Terminated Successfully!")
 }
