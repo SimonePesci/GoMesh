@@ -10,7 +10,7 @@ GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-pla
 - Panic recovery middleware
 - Request tracing (`X-Trace-ID`)
 - gRPC control plane: proxy registration and config streaming
-- Versioned in-memory route store on the control plane
+- Proxy identity and control-plane address in bootstrap config
 
 ## Requirements
 
@@ -21,7 +21,7 @@ GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-pla
 ```
 Client  →  Proxy (:8000)  →  Backend (:3000)
                 ↑
-         gRPC stream
+         gRPC (register + stream)
                 │
          Control plane (:9090)
 ```
@@ -31,15 +31,15 @@ Client  →  Proxy (:8000)  →  Backend (:3000)
 ```
 GoMesh/
 ├── cmd/
-│   ├── proxy/          # Data plane
-│   ├── controller/     # Control plane
-│   └── backend/        # Test backend
+│   ├── proxy/
+│   ├── controller/
+│   └── backend/
 ├── pkg/
-│   ├── controlplane/   # gRPC server and config store
+│   ├── controlplane/
 │   ├── logging/
 │   ├── tracing/
-│   └── proxy/
-├── api/proto/          # mesh.proto and generated code
+│   └── proxy/          # includes control-plane client
+├── api/proto/
 ├── scripts/generate-proto.sh
 ├── config/proxy.yaml
 ├── Makefile
@@ -51,38 +51,49 @@ GoMesh/
 ```bash
 go mod download
 
-# terminal 1 – test backend
 go run cmd/backend/main.go
-
-# terminal 2 – control plane
 go run cmd/controller/main.go
-# flags: -port (default 9090), -production
-
-# terminal 3 – proxy
 go run cmd/proxy/main.go
 
-# terminal 4 – traffic
 curl -v http://localhost:8000/api/users
 curl http://localhost:8000/metrics
 ```
 
+## Configuration
+
+`config/proxy.yaml`:
+
+```yaml
+proxy:
+  id: "proxy-1"
+  version: "1.0.0"
+  listen_port: 8000
+  advertise_addr: "localhost:8000"
+  backend:
+    host: "localhost"
+    port: 3000
+  timeout:
+    read_timeout: 30s
+    write_timeout: 30s
+    idle_timeout: 120s
+
+control_plane:
+  address: "localhost:9090"
+```
+
+Startup validates proxy identity, advertise address, and control-plane address.
+
 ## Control plane
 
-- Listens on gRPC port `9090` by default
-- `RegisterProxy`: tracks connected proxies
-- `StreamConfig`: sends versioned `ConfigUpdate` messages (default route to `localhost:3000`)
-- Thread-safe config store with auto-incrementing versions
-- Graceful shutdown on SIGINT / SIGTERM
+- gRPC on port `9090` (`-port`, `-production`)
+- `RegisterProxy` / `StreamConfig`
+- Versioned route store with default backend `localhost:3000`
 
 ## Protocol Buffers
 
 ```bash
 bash scripts/generate-proto.sh
 ```
-
-## Configuration
-
-`config/proxy.yaml` controls proxy listen port, static backend, and timeouts.
 
 ## License
 
