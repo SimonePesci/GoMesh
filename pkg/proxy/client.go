@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync"
 
 	pb "github.com/SimonePesci/gomesh/api/proto"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/proto"
 )
 
 // This manages the connection to the control plane.
@@ -108,6 +110,39 @@ func (c *ControlPlaneClient) Register(ctx context.Context) (*pb.RegistrationResp
 	return response, nil
 }
 
+func (c *ControlPlaneClient) StartConfigStream(ctx context.Context) (<-chan struct{}, <-chan error, error) {
+	if c.client == nil {
+		return nil, nil, fmt.Errorf("control plane client is not connected")
+	}
+
+	c.logger.Info("subscribing to control plane config stream",
+		zap.String("proxy_id", c.proxyID),
+	)
+
+	stream, err := c.client.StreamConfig(ctx, c.proxyInfo())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to start control plane config stream: %w", err)
+	}
+
+	c.logger.Info("control plane config stream established",
+		zap.String("proxy_id", c.proxyID),
+	)
+
+	readyCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go c.receiveConfigUpdates(ctx, stream, readyCh, errCh)
+
+	return readyCh, errCh, nil
+}
+
+func (c *ControlPlaneClient) GetConfig() *pb.ConfigUpdate {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	return cloneConfig(c.config)
+}
+
 func (c *ControlPlaneClient) Close() error {
 	if c.conn == nil {
 		return nil
@@ -136,6 +171,49 @@ func (c *ControlPlaneClient) proxyInfo() *pb.ProxyInfo {
 	}
 }
 
+func (c *ControlPlaneClient) receiveConfigUpdates(
+	ctx context.Context,
+	stream pb.MeshControl_StreamConfigClient,
+	readyCh chan<- struct{},
+	errCh chan<- error,
+) {
+	receivedInitialConfig := false
+
+	for {
+		update, err := stream.Recv()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			if err == io.EOF {
+				errCh <- fmt.Errorf("control plane config stream closed unexpectedly")
+				return
+			}
+
+			errCh <- fmt.Errorf("failed to receive config update from control plane: %w", err)
+			return
+		}
+
+		config := c.storeConfig(update)
+
+		c.logger.Info("received config update from control plane",
+			zap.String("proxy_id", c.proxyID),
+			zap.Int64("version", config.Version),
+			zap.Int("num_routes", len(config.Routes)),
+		)
+
+		if !receivedInitialConfig {
+			receivedInitialConfig = true
+			close(readyCh)
+		}
+
+		if c.onConfigUpdate != nil {
+			c.onConfigUpdate(cloneConfig(config))
+		}
+	}
+}
+
 func (c *ControlPlaneClient) waitUntilReady(ctx context.Context) error {
 	for {
 		state := c.conn.GetState()
@@ -151,4 +229,22 @@ func (c *ControlPlaneClient) waitUntilReady(ctx context.Context) error {
 			return fmt.Errorf("timed out waiting for control plane connection to become ready: %w", ctx.Err())
 		}
 	}
+}
+
+func (c *ControlPlaneClient) storeConfig(config *pb.ConfigUpdate) *pb.ConfigUpdate {
+	clonedConfig := cloneConfig(config)
+
+	c.mu.Lock()
+	c.config = clonedConfig
+	c.mu.Unlock()
+
+	return cloneConfig(clonedConfig)
+}
+
+func cloneConfig(config *pb.ConfigUpdate) *pb.ConfigUpdate {
+	if config == nil {
+		return nil
+	}
+
+	return proto.Clone(config).(*pb.ConfigUpdate)
 }

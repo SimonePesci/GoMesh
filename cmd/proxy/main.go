@@ -66,6 +66,59 @@ func main() {
 	}
 	cancelRegister()
 
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	controlPlaneReady, controlPlaneErrors, err := controlPlaneClient.StartConfigStream(streamCtx)
+	if err != nil {
+		cancelStream()
+
+		if closeErr := controlPlaneClient.Close(); closeErr != nil {
+			logger.Warn("Failed to close control plane client after stream setup error",
+				zap.Error(closeErr),
+			)
+		}
+
+		logger.Fatal("Failed to start control plane config stream",
+			zap.String("proxy_id", config.Proxy.ID),
+			zap.Error(err),
+		)
+	}
+
+	initialConfigCtx, cancelInitialConfig := context.WithTimeout(context.Background(), controlPlaneStartupTimeout)
+	select {
+	case <-controlPlaneReady:
+		cancelInitialConfig()
+	case err := <-controlPlaneErrors:
+		cancelInitialConfig()
+		cancelStream()
+
+		if closeErr := controlPlaneClient.Close(); closeErr != nil {
+			logger.Warn("Failed to close control plane client after initial config error",
+				zap.Error(closeErr),
+			)
+		}
+
+		logger.Fatal("Failed to receive initial config from control plane",
+			zap.String("proxy_id", config.Proxy.ID),
+			zap.Error(err),
+		)
+	case <-initialConfigCtx.Done():
+		cancelInitialConfig()
+		cancelStream()
+
+		if closeErr := controlPlaneClient.Close(); closeErr != nil {
+			logger.Warn("Failed to close control plane client after initial config timeout",
+				zap.Error(closeErr),
+			)
+		}
+
+		logger.Fatal("Timed out waiting for initial config from control plane",
+			zap.String("proxy_id", config.Proxy.ID),
+			zap.Duration("timeout", controlPlaneStartupTimeout),
+		)
+	}
+
+	defer cancelStream()
+
 	defer func() {
 		if err := controlPlaneClient.Close(); err != nil {
 			logger.Warn("Failed to close control plane client",
@@ -97,10 +150,18 @@ func main() {
 				zap.Error(err),
 			)
 		}
+	case err := <-controlPlaneErrors:
+		cancelStream()
+		logger.Fatal("Control plane config stream error",
+			zap.String("proxy_id", config.Proxy.ID),
+			zap.Error(err),
+		)
 	case sig := <-signChan:
 		logger.Info("Received signal",
 			zap.String("signal", sig.String()),
 		)
+
+		cancelStream()
 
 		if err := server.Shutdown(10 * time.Second); err != nil {
 			logger.Warn("Failed to shutdown server gracefully",

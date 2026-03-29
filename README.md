@@ -1,6 +1,6 @@
 # GoMesh
 
-GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-plane proxy and a gRPC control plane that tracks proxies and streams routing configuration.
+GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-plane proxy and a gRPC control plane that registers proxies and streams versioned routing configuration.
 
 ## Features
 
@@ -9,8 +9,9 @@ GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-pla
 - Prometheus metrics (`/metrics`)
 - Panic recovery middleware
 - Request tracing (`X-Trace-ID`)
-- gRPC control plane with proxy registration and config streaming
-- Mandatory control-plane connection and registration before the proxy serves traffic
+- gRPC control plane (`RegisterProxy`, `StreamConfig`)
+- Mandatory proxy registration and first config update before serving traffic
+- In-memory storage of the latest streamed config on the proxy
 
 ## Requirements
 
@@ -21,27 +22,32 @@ GoMesh is a lightweight service mesh written in Go. It provides an HTTP data-pla
 ```
 Client  →  Proxy (:8000)  →  Backend (:3000)
                 ↑
-         RegisterProxy + StreamConfig
+         gRPC register + config stream
                 │
          Control plane (:9090)
 ```
 
-The proxy fails fast at startup if the control plane is unreachable or registration fails.
+1. Proxy connects to the control plane and calls `RegisterProxy`
+2. Proxy opens `StreamConfig` and waits for the initial `ConfigUpdate`
+3. Proxy stores the config in memory and starts the HTTP server
+4. If the config stream fails after startup, the proxy stops
+
+Request forwarding still uses the static backend from bootstrap YAML until dynamic route application is implemented.
 
 ## Project layout
 
 ```
 GoMesh/
 ├── cmd/
-│   ├── proxy/
-│   ├── controller/
-│   └── backend/
+│   ├── proxy/              # Data plane
+│   ├── controller/         # Control plane
+│   └── backend/            # Test backend
 ├── pkg/
-│   ├── controlplane/
-│   ├── logging/
-│   ├── tracing/
-│   └── proxy/
-├── api/proto/
+│   ├── controlplane/       # gRPC server, config store
+│   ├── logging/            # Zap wrapper
+│   ├── tracing/            # Trace IDs
+│   └── proxy/              # HTTP server, middleware, CP client
+├── api/proto/              # mesh.proto + generated stubs
 ├── scripts/generate-proto.sh
 ├── config/proxy.yaml
 ├── Makefile
@@ -50,28 +56,34 @@ GoMesh/
 
 ## Quick start
 
-Start components in this order:
-
 ```bash
 go mod download
 
+# 1. Backend
 go run cmd/backend/main.go
+
+# 2. Control plane
 go run cmd/controller/main.go
+
+# 3. Proxy (requires control plane)
 go run cmd/proxy/main.go
 
+# 4. Traffic
 curl -v http://localhost:8000/api/users
 curl http://localhost:8000/metrics
 curl http://localhost:8000/panic
 ```
 
-### Controller flags
+### Flags
+
+**Controller**
 
 | Flag | Default | Description |
 |---|---|---|
 | `-port` | `9090` | gRPC listen port |
 | `-production` | `false` | JSON logging when true |
 
-### Proxy flags
+**Proxy**
 
 | Flag | Default | Description |
 |---|---|---|
@@ -97,24 +109,45 @@ control_plane:
   address: "localhost:9090"
 ```
 
-Until dynamic routing is wired end-to-end, request forwarding still uses the static `backend` block. Registration with the control plane is already mandatory.
-
 ## Observability
 
-- Structured logs with `trace_id`
-- Prometheus at `/metrics`
-- `X-Trace-ID` on requests and responses
+| Concern | Detail |
+|---|---|
+| Logging | Zap structured fields (`trace_id`, method, path, status, latency) |
+| Metrics | `/metrics` — counters, histograms, in-flight gauge |
+| Tracing | `X-Trace-ID` generated or accepted, propagated, returned |
 
-## Middleware stack
+### Middleware order
 
 ```
 Recovery → Tracing → Metrics → Logging → ReverseProxy
 ```
 
-## Protocol Buffers
+## Control plane API
+
+Defined in `api/proto/mesh.proto`:
+
+| RPC | Type | Purpose |
+|---|---|---|
+| `RegisterProxy` | unary | Register a proxy instance |
+| `StreamConfig` | server streaming | Push versioned route configs |
+
+Regenerate stubs:
 
 ```bash
 bash scripts/generate-proto.sh
+```
+
+## Roadmap
+
+- Apply streamed config to request routing (replace static backend YAML)
+- Service discovery and load balancing
+- Production hardening (mTLS, circuit breaking, rate limits)
+
+## Build
+
+```bash
+make build
 ```
 
 ## License
